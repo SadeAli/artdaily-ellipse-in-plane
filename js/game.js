@@ -230,24 +230,40 @@
   }
 
   /* Everything inside FREE is full credit, so a genuinely nailed
-     ellipse reads 100 instead of 96 — and the scale starts there. */
+     ellipse reads 100 instead of 96 — and the scale starts there. FREE is
+     the pen standard; ArtDaily.ease() opens it for a hand that cannot hold
+     as still, and FREE_PX floors it, because 2% of a 150px phone face
+     diagonal is 3px — inside a fingertip's own jitter. */
   var FREE = 0.02;
+  var FREE_PX = 5;
+  var ZERO = 0.55;      /* total error that reaches 0, pen standard */
+  var SIZE_CAP = 0.38;  /* size alone can no longer swallow the budget */
 
   /* Item score 0–100 plus the three error terms that made it, so the
      reveal can say WHICH way you were wrong. Angle error is weighted
      by the truth's eccentricity: a near-circular truth makes its axis
-     direction meaningless, so the weight fades to zero. */
-  function scoreItem(player, truth, faceDiag) {
+     direction meaningless, so the weight fades to zero.
+
+     The size term is scale + SHAPE, not two relative radius errors. The
+     old `|p.b−t.b|/t.b` made a small absolute miss on a narrow truth
+     catastrophic (face 3's minor axis is ~40px, so 8px of hand noise cost
+     20% of the whole budget) and it was uncapped, so it could zero an
+     otherwise good ellipse on its own — while the drill's own coaching
+     asks for tilt first. Shape is measured as b/a: the DEGREE the drill
+     exists to teach, and the number the reveal already prints. */
+  function scoreItem(player, truth, faceDiag, ease) {
     var p = normEllipse(player), t = normEllipse(truth);
-    var centreErr = Math.hypot(p.cx - t.cx, p.cy - t.cy) / Math.max(1e-9, faceDiag);
+    var diag = Math.max(1e-9, faceDiag);
+    var centreErr = Math.hypot(p.cx - t.cx, p.cy - t.cy) / diag;
     var angErrDeg = foldAngleDeg((p.theta - t.theta) * 180 / Math.PI);
     var wAng = clamp((1 - t.b / Math.max(1e-9, t.a)) * 2, 0, 1);
-    var sizeErr = (Math.abs(p.a - t.a) / Math.max(1e-9, t.a)
-      + Math.abs(p.b - t.b) / Math.max(1e-9, t.b)) / 2;
+    var scaleErr = Math.abs(p.a - t.a) / Math.max(1e-9, t.a);
+    var shapeErr = Math.abs(p.b / Math.max(1e-9, p.a) - t.b / Math.max(1e-9, t.a));
     var centre = 1.4 * centreErr;
     var angle = wAng * (angErrDeg / 90) * 0.8;
-    var size = sizeErr;
-    var err = Math.max(0, centre + angle + size - FREE) / 0.55;
+    var size = Math.min(SIZE_CAP, 0.7 * scaleErr + shapeErr);
+    var free = Math.max(ease(FREE), ease(FREE_PX) / diag);
+    var err = Math.max(0, centre + angle + size - free) / Math.max(1e-9, ease(ZERO));
     var s = 100 * clamp(1 - err, 0, 1);
     return {
       score: isFinite(s) ? s : 0,
@@ -260,6 +276,12 @@
     var s = 0, i;
     for (i = 0; i < scores.length; i++) s += scores[i];
     return s / scores.length;
+  }
+
+  function bestScore(scores) {
+    var b = 0, i;
+    for (i = 0; i < scores.length; i++) if (scores[i] > b) b = scores[i];
+    return b;
   }
 
   /* The "degree" artists buy ellipse templates in: b/a = sin(deg). */
@@ -372,7 +394,7 @@
      item 0 an open top face (looked down on at 44–56°), item 1 a
      turned side, item 2 a narrow, heavily foreshortened side (face
      normal 62–75° off the view axis). */
-  function genItem3D(idx) {
+  function genItem3D(idx, gentle) {
     var s = 1, side = Math.random() < 0.5 ? -1 : 1;
     var yaw, C, faceAxis, faceSign, depr, alpha, Cz;
     if (idx === 0) {
@@ -382,7 +404,12 @@
       C = { x: rand(-0.3, 0.3), y: -Math.tan(depr) * Cz - 0.5 * s, z: Cz };
       faceAxis = 1; faceSign = 1;
     } else {
-      alpha = idx === 1 ? rand(48, 56) : rand(62, 75);
+      /* gentle: a first-ever round, or a canvas small enough that the
+         narrow face's minor axis would come out under ~25px. A 20° ellipse
+         is a template shape most beginners have never drawn — meeting it
+         on the last item of the first round is how a round ends on its
+         worst number. */
+      alpha = idx === 1 ? rand(48, 56) : (gentle ? rand(52, 62) : rand(62, 75));
       yaw = side * radians(alpha);
       Cz = idx === 1 ? rand(4.2, 5.0) : rand(5.2, 6.2);
       /* lateral shift keeps the chosen face turned toward the camera */
@@ -506,11 +533,47 @@
   /* ---- round state ---- */
   var round = 0, itemIdx = 0, itemScores = [], roundOver = false, reported = false;
   var scene = null, player = null, state = 'idle'; /* idle | aim | reveal */
-  var stroke = null;      /* live freehand points, draw mode */
+  var stroke = null;      /* live freehand segment, draw mode */
+  /* Every segment of the sweep in progress. A trackpad physically cannot
+     pull a 250px closed arc in one go, and the old rule threw a lifted
+     sweep away entirely, so the drill hard-failed on the most common
+     laptop. A press near where you stopped, soon after, continues the
+     same sweep; the conic is fitted to the union. */
+  var sweep = null;       /* { segs: [[pt,…],…], liftAt, liftPt } */
+  var missedClosure = 0;  /* consecutive unfinished sweeps on this face */
   var grabbed = false;    /* first handle touch retires the micro-labels */
+  var FIRST_VISIT = ArtDaily.best() === null;
+  var RESUME_MS = 2500;
+
+  function ease(v) { return ArtDaily.ease(v); }
+
+  /* How far round a sweep must get before it counts as an ellipse. A pen
+     keeps the strict rule; a hand that has to lift is given room, and with
+     multi-segment sweeps it rarely matters. */
+  function coverMin() { return 0.75 - (ease(1) - 1) * 0.09; }
+
+  function sweepPts() {
+    var out = [], i, j, s;
+    if (sweep) {
+      for (i = 0; i < sweep.segs.length; i++) {
+        s = sweep.segs[i];
+        for (j = 0; j < s.length; j++) out.push(s[j]);
+      }
+    }
+    if (stroke) for (j = 0; j < stroke.pts.length; j++) out.push(stroke.pts[j]);
+    return out;
+  }
+
+  function pathLen(pts) {
+    var i, len = 0;
+    for (i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return len;
+  }
+  var modeChosen = false;   /* has the player ever picked a mode? */
   var mode = (function () {
     var v = null;
     try { v = localStorage.getItem(MODE_KEY); } catch (e) {}
+    modeChosen = (v === 'handles' || v === 'draw');
     return v === 'handles' ? 'handles' : 'draw';
   })();
 
@@ -525,7 +588,8 @@
     if (mode === 'draw') {
       verb = player
         ? 'redraw over it, or nudge the handles, then lock it in.'
-        : 'sweep the ellipse onto the tinted face in one closed stroke.';
+        : 'sweep the ellipse onto the tinted face — all the way round. ' +
+          'lifting is fine: press near where you stopped and carry on.';
     } else {
       verb = 'drag the plate onto the tinted face — centre moves, rim handles set length and tilt, the small one sets width — then lock it in.';
     }
@@ -582,17 +646,23 @@
     }
   }
 
+  /* The button names the DESTINATION, not the state it is already in.
+     "mode: draw ✎" told a trackpad player nothing about the way out. */
   function syncMode() {
-    btnMode.textContent = mode === 'draw' ? 'mode: draw ✎' : 'mode: handles ⊹';
+    btnMode.textContent = mode === 'draw' ? 'switch to handles ⊹' : 'switch to drawing ✎';
     btnMode.setAttribute('aria-pressed', String(mode === 'draw'));
     btnMode.title = mode === 'draw'
-      ? 'freehand — sweep the whole ellipse in one stroke'
-      : 'gizmo — drag the centre, the rim handles and the width handle';
+      ? 'same drill, drag a plate into place instead of sweeping it'
+      : 'freehand — sweep the whole ellipse, lifting as often as you like';
   }
 
   function startItem(idx) {
     itemIdx = idx;
-    scene = layoutScene(genItem3D(idx), W, H);
+    /* narrow sheets get the gentler foreshortening too: the truth's minor
+       axis must stay big enough to aim at */
+    scene = layoutScene(genItem3D(idx, FIRST_VISIT && round <= 1 || W < 480), W, H);
+    sweep = null;
+    missedClosure = 0;
     cancelPointer();
     state = 'aim';
     btnLock.hidden = false;
@@ -603,6 +673,13 @@
     measureLock();
     player = (mode === 'draw') ? null : initPlayer(scene);
     hint.textContent = itemHint();
+    /* Draw mode is the default and the studio way, but a trackpad had no
+       way to learn the other one existed short of opening the how-to.
+       Say it once, on the first face, and never again. */
+    if (!modeChosen && mode === 'draw' && round === 1 && idx === 0 &&
+        ArtDaily.inputMode() !== 'pen') {
+      hint.textContent += ' on a mouse or trackpad? “switch to handles ⊹” is the same drill, dragged instead of swept.';
+    }
     draw();
   }
 
@@ -624,7 +701,7 @@
 
   function lockIn() {
     if (state !== 'aim' || !player) return;
-    var r = scoreItem(player, scene.truth, scene.faceDiag);
+    var r = scoreItem(player, scene.truth, scene.faceDiag, ease);
     itemScores.push(r.score);
     state = 'reveal';
     cancelPointer();
@@ -645,7 +722,10 @@
         hudBest.textContent = res.best === null ? '–' : String(res.best);
         showToast((res.isNewBest ? 'new best! ' : 'score ') + res.score + ' / 100', res.isNewBest);
       }
+      /* the ramp guarantees the LAST face is the worst, so the round used
+         to end on the player's weakest number. Name the best one too. */
       hint.textContent = head + ' round done — faces ' + scoreList() +
+        ' · your best face ' + Math.round(bestScore(itemScores)) +
         '. press “new round” (or enter) to go again.';
     }
     draw();
@@ -761,9 +841,9 @@
 
     if (state === 'aim') {
       if (player) drawPlayer(c, true);
-      if (stroke) drawStroke(c);
-      if (!player && !stroke && mode === 'draw') {
-        inkText(c, '✎ drag anywhere to sweep your ellipse', 10, H - 8, 'left', 'bottom', 11);
+      if (stroke || (sweep && sweep.segs.length)) drawStroke(c);
+      if (!player && !stroke && !(sweep && sweep.segs.length) && mode === 'draw') {
+        inkText(c, '✎ drag anywhere to sweep your ellipse — lifting is fine', 10, H - 8, 'left', 'bottom', 11);
       }
       if (player && !grabbed && round === 1 && itemIdx === 0) drawHandleLabels(c);
     } else if (state === 'reveal') {
@@ -772,19 +852,25 @@
     }
   }
 
+  /* Every segment of the sweep, each as its own path — a lift leaves a
+     gap in the ink rather than a false chord across the plate. */
   function drawStroke(c) {
-    var p = stroke.pts, i;
-    if (p.length < 2) return;
+    var segs = (sweep ? sweep.segs.slice() : []), i, j, p;
+    if (stroke) segs.push(stroke.pts);
     ctx.save();
     ctx.strokeStyle = c.ink;
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(p[0].x, p[0].y);
-    for (i = 1; i < p.length; i++) ctx.lineTo(p[i].x, p[i].y);
-    ctx.stroke();
+    for (i = 0; i < segs.length; i++) {
+      p = segs[i];
+      if (p.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(p[0].x, p[0].y);
+      for (j = 1; j < p.length; j++) ctx.lineTo(p[j].x, p[j].y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -887,6 +973,11 @@
     ctx.arc(ax.x, ax.y, 2.6, 0, TAU);
     ctx.fill();
     ctx.restore();
+    /* name both at once, on the picture that defines them: the dashed line
+       IS the axle, and the ellipse's short way across lies along it */
+    inkText(c, 'axle · the minor (short) axis lies along it',
+      clamp(ax.x + ax.dx * (L + 6), 96, W - 96),
+      clamp(ax.y + ax.dy * (L + 6), 10, H - 10), 'center', 'middle', 10);
 
     var yext = Math.sqrt(Math.pow(t.a * Math.sin(t.theta), 2) +
       Math.pow(t.b * Math.cos(t.theta), 2));
@@ -903,8 +994,18 @@
 
   /* ---- input: one pointer either drags one handle or draws ---- */
 
-  var HIT = 24; /* handle hit radius: 48px-wide touch targets */
+  /* handle hit radius: 48px-wide targets on a mouse, wider on a pen
+     tablet (the hand is out of sight) and on a fingertip */
+  function hitR() { return ArtDaily.startRadius(24); }
   var drag = null;
+  var dragType = '', lastPenAt = 0;
+
+  /* Palm rejection: a pen press takes the sheet off a touch that is
+     mid-stroke (its ink is dropped — it was a palm, not a player), and a
+     touch press is ignored for a moment after any pen. */
+  function palmBlocked(ev) {
+    return ev.pointerType === 'touch' && lastPenAt && (Date.now() - lastPenAt) < 1200;
+  }
 
   /* Drop whatever pointer is in flight. A second finger can press “new
      round”, flip the mode or resize the sheet while the first is still
@@ -913,6 +1014,7 @@
   function cancelPointer() {
     if (stroke) { try { canvas.releasePointerCapture(stroke.id); } catch (e) {} stroke = null; }
     if (drag) { try { canvas.releasePointerCapture(drag.id); } catch (e) {} drag = null; }
+    dragType = '';
     canvas.classList.remove('dragging');
   }
 
@@ -930,10 +1032,10 @@
       ['c', E.cx, E.cy, 4], /* centre yields to overlapping rim handles,
                                but keeps a >= 40px effective target */
     ];
-    var best = null, i, d;
+    var best = null, i, d, reach = hitR();
     for (i = 0; i < cand.length; i++) {
       d = Math.hypot(px - cand[i][1], py - cand[i][2]) + cand[i][3];
-      if (d < HIT && (!best || d < best.d)) best = { kind: cand[i][0], d: d };
+      if (d < reach && (!best || d < best.d)) best = { kind: cand[i][0], d: d };
     }
     if (best) return best.kind;
     /* in handles mode, anywhere inside the plate drags the whole plate;
@@ -946,19 +1048,36 @@
     return (lx * lx + ly * ly <= 1.2) ? 'c' : null;
   }
 
+  /* A lifted sweep is an UNFINISHED sweep, not a failed one. The segment
+     that just ended is banked, the ink stays on the sheet, and the fit is
+     tried against every segment together — so two half-arcs read as one
+     ellipse. Nothing is ever silently discarded, and the message says what
+     is actually missing rather than accusing the player of a mistake their
+     hardware made. */
   function finishStroke() {
-    var pts = stroke.pts, i, len = 0;
+    var seg = stroke.pts;
     stroke = null;
     canvas.classList.remove('dragging');
-    for (i = 1; i < pts.length; i++) {
-      len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    }
-    if (len < 24) { draw(); return; }   /* a tap, not a stroke */
+    if (!sweep) sweep = { segs: [], liftAt: 0, liftPt: null };
+    if (seg.length > 1) sweep.segs.push(seg);
+    sweep.liftAt = Date.now();
+    sweep.liftPt = seg[seg.length - 1];
+    var pts = sweepPts();
+    if (pathLen(pts) < 24) { draw(); return; }   /* a tap, not a sweep */
     var e = fitEllipseToStroke(pts);
-    var ok = e && isFinite(e.theta) && e.a > 8 && e.b > 3 &&
-      e.a < 2 * Math.max(W, H) && strokeCoverage(pts, e) >= 0.75;
-    if (!ok) {
-      hint.textContent = 'that stroke never closed — sweep all the way round, back to where you started.';
+    var cov = e ? strokeCoverage(pts, e) : 0;
+    var fitOk = e && isFinite(e.theta) && e.a > 8 && e.b > 3 && e.a < 2 * Math.max(W, H);
+    if (!fitOk || cov < coverMin()) {
+      missedClosure += 1;
+      /* two different failures, two different truths */
+      hint.textContent = !fitOk
+        ? 'that loop crossed itself — one smooth pass round the face, and keep going: ' +
+          'a lift does not end it, press near where you stopped to carry on.'
+        : 'you are ' + Math.round(cov * 100) + '% of the way round — press near where you ' +
+          'stopped and keep sweeping. the halves count as one ellipse.';
+      if (missedClosure >= 2 && mode === 'draw') {
+        hint.textContent += ' (or press “switch to handles ⊹” and drag one into place instead.)';
+      }
       draw();
       return;
     }
@@ -966,6 +1085,8 @@
     E.a = clamp(E.a, 14, 0.62 * Math.min(W, H));
     E.b = clamp(E.b, 5, E.a);
     player = E;
+    missedClosure = 0;
+    sweep = null;           /* accepted: the plate takes over from the ink */
     clampCentre(player);
     syncLock();
     hint.textContent = itemHint();
@@ -973,13 +1094,23 @@
   }
 
   canvas.addEventListener('pointerdown', function (ev) {
+    if (ev.pointerType === 'pen') lastPenAt = Date.now();
+    if (palmBlocked(ev)) return;
     ev.preventDefault();
     canvas.focus();
-    if (state !== 'aim' || drag || stroke) return;
+    if (state !== 'aim') return;
+    if (drag || stroke) {
+      /* the pen is the hand that meant it: it takes the sheet off a touch
+         mid-stroke, and that touch's ink goes with it */
+      if (!(ev.pointerType === 'pen' && dragType === 'touch')) return;
+      if (stroke) sweep = null;
+      cancelPointer();
+    }
     var p = pointerPos(ev);
     var kind = player ? pickHandle(p.x, p.y) : null;
     if (kind) {
       grabbed = true;
+      dragType = ev.pointerType;
       drag = { id: ev.pointerId, kind: kind, gx: p.x - player.cx, gy: p.y - player.cy };
       try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
       canvas.classList.add('dragging');
@@ -987,6 +1118,12 @@
       return;
     }
     if (mode !== 'draw') return;
+    /* carry on the same sweep when the press lands near where the last one
+       lifted, soon after; otherwise this is a fresh attempt */
+    var carry = sweep && sweep.liftPt && (Date.now() - sweep.liftAt) < RESUME_MS &&
+      Math.hypot(p.x - sweep.liftPt.x, p.y - sweep.liftPt.y) <= ArtDaily.startRadius(50);
+    if (!carry) { sweep = null; missedClosure = 0; }
+    dragType = ev.pointerType;
     stroke = { id: ev.pointerId, pts: [p] };
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
     canvas.classList.add('dragging');
@@ -999,7 +1136,12 @@
     if (stroke && ev.pointerId === stroke.id) {
       ev.preventDefault();
       p = pointerPos(ev);
-      stroke.pts.push({ x: clamp(p.x, 0, W), y: clamp(p.y, 0, H) });
+      /* True coordinates, NOT clamped into the rect. Clamping wrote a
+         straight run along the sheet edge into the point cloud whenever a
+         finger overshot, which quietly dragged the fitted conic — a wrong
+         ellipse with no message, which is worse than a rejection. Samples
+         far outside the sheet are dropped instead. */
+      if (Math.abs(p.x - W / 2) < 1.6 * W && Math.abs(p.y - H / 2) < 1.6 * H) stroke.pts.push(p);
       draw();
       return;
     }
@@ -1026,6 +1168,7 @@
   function endPointer(ev) {
     if (stroke && ev.pointerId === stroke.id) {
       try { canvas.releasePointerCapture(stroke.id); } catch (e) {}
+      dragType = '';
       if (ev.type === 'pointercancel') {
         stroke = null;
         canvas.classList.remove('dragging');
@@ -1038,10 +1181,16 @@
     if (!drag || ev.pointerId !== drag.id) return;
     try { canvas.releasePointerCapture(drag.id); } catch (e) {}
     drag = null;
+    dragType = '';
     canvas.classList.remove('dragging');
   }
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
+  /* a pointerup lost outside the canvas used to block every later press
+     until the next item, because pointerdown returns early while one is
+     in flight */
+  window.addEventListener('pointerup', endPointer);
+  window.addEventListener('pointercancel', endPointer);
 
   /* keyboard: enter locks / advances / starts the next round,
      arrows move, [ ] tilt, - = major, , . minor, r starts over */
@@ -1061,6 +1210,8 @@
     if (k === 'r' || k === 'R') {
       ev.preventDefault();
       cancelPointer();
+      sweep = null;
+      missedClosure = 0;
       player = (mode === 'draw' || !scene) ? null : initPlayer(scene);
       syncLock();
       hint.textContent = itemHint();
@@ -1091,10 +1242,13 @@
 
   btnMode.addEventListener('click', function () {
     mode = (mode === 'draw') ? 'handles' : 'draw';
+    modeChosen = true;
     try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
     syncMode();
     if (state !== 'aim') return;
     cancelPointer();
+    sweep = null;
+    missedClosure = 0;
     /* handles mode always has a plate to grab; switching back to draw
        keeps the one you already have. Label the sticker for the mode we
        are now in BEFORE measuring it, then re-clamp the plate against
@@ -1130,6 +1284,9 @@
   });
 
   ArtDaily.onTheme(draw);
+  /* the hardware can change mid-session (an iPad user picks up the
+     pencil): handle reach, the closure rule and the free zone follow it */
+  ArtDaily.onInput(draw);
 
   /* Resizing re-projects the scene; the player's ellipse rides along
      through the same similarity change so nothing is lost. */
