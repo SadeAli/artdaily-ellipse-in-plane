@@ -387,6 +387,16 @@ a { color: inherit; }
    game-specific styles below this line
    ============================================================ */
 
+/* Canvas line-work rose. --game-accent (--bubblegum) is a wash colour:
+   at full strength it is still only 2.95:1 against the paper card, so
+   the revealed ellipse drawn in it would miss AA on the light sheet.
+   --game-line is the same rose at graphite weight, used for the strokes
+   that MEAN something (the true ellipse, the tinted face's outline):
+   5.2:1 on paper, 8:1 on the night sheet. game.js reads both via
+   getComputedStyle inside draw(), so a theme flip repaints correctly. */
+:root { --game-line: #A84876; }
+:root[data-theme="dark"] { --game-line: #EA9CC1; }
+
 /* "lock it in" — a sticker pinned to the sheet's corner, over the
    canvas. Min 44px tall so it is an easy thumb target. */
 .btn-lock {
@@ -401,5 +411,17 @@ a { color: inherit; }
 }
 .btn-lock:hover { transform: rotate(0deg) translateY(-2px); }
 
-/* While a handle is being dragged the crosshair is wrong. */
+/* On a narrow canvas the sticker would sit ON the plate's drag
+   territory — a tap meant for the centre would score the face
+   instead — so it steps off the sheet into a plain row below. */
+@media (max-width: 640px) {
+  .btn-lock {
+    position: static;
+    display: block;
+    margin: 10px auto 0;
+  }
+}
+
+/* While a handle is being dragged (or a stroke swept) the crosshair
+   is wrong. */
 .game-canvas.dragging { cursor: grabbing; }

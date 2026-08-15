@@ -49,20 +49,23 @@
       <p class="hint" id="hint">Loading…</p>
 
       <div class="game-stage">
-        <canvas class="game-canvas" id="gameCanvas" tabindex="0" role="img" aria-label="Ellipse in Plane drill area"></canvas>
+        <canvas class="game-canvas" id="gameCanvas" tabindex="0" role="img" aria-label="Ellipse in Plane drill area — in draw mode sweep the ellipse in one stroke; arrows move it, square brackets tilt it, minus and equals set its length, comma and period set its width, R starts the plate over, Enter locks it in"></canvas>
         <button class="btn btn-lock" id="btnLock" hidden>lock it in</button>
         <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
       </div>
 
       <div class="game-controls">
         <button class="btn btn-primary" id="btnRound">new round <span aria-hidden="true">↻</span></button>
+        <button class="btn" id="btnMode" aria-pressed="true">mode: draw ✎</button>
         <button class="btn" id="btnHow" aria-expanded="false" aria-controls="howTo">how to play</button>
       </div>
       <div class="howto" id="howTo" hidden>
         <p class="howto-cmd" aria-hidden="true"><span class="prompt">$</span> man ellipse-in-plane</p>
-        <p>Drag the plate onto the highlighted face — centre moves it, the rim handles set length + tilt, the small handle sets width — then lock it in.</p>
-        <p>Scored against the exact circle that face holds: placement, axis angle and both radii. Three faces per round, each more foreshortened.</p>
-        <p>Studio tip: the minor axis always aims along the plane's normal — on a wheel, straight down the axle. Nail that direction before you touch the size.</p>
+        <p><b>Draw mode</b> (the studio way): sweep the whole ellipse onto the highlighted face in one closed stroke. Your stroke is fitted to an ellipse, then the handles appear so you can nudge it — or press <b>R</b> and draw it again. <b>Handles mode</b> skips the stroke: the centre moves the plate, the two rim dots set length + tilt, the small accent dot sets width.</p>
+        <p>Scored against the exact circle that face holds — its image is solved in closed form from the camera, not sketched in. Placement, axis angle and both radii each count; nail all three and it reads 100. Three faces per round, each more foreshortened, and after each lock the hint names whichever of the three you missed by most.</p>
+        <p>Keys: <b>arrows</b> move · <b>[ ]</b> tilt · <b>-</b> <b>=</b> length · <b>,</b> <b>.</b> width · <b>R</b> start the plate over · <b>Enter</b> lock in, then next face, then new round. Hold shift for bigger steps.</p>
+        <p>The dashed line across the sheet is the <b>horizon</b> — your eye level. The dashed line through the reveal is the <b>axle</b>: the face's normal, projected for real. An ellipse's <b>degree</b> is what templates are sold in — 30° means the minor axis is sin 30° = half the major.</p>
+        <p>Studio tip: the minor axis runs down the axle — on a wheel, straight out along the hub. Nail that direction before you touch the size.</p>
       </div>
 
       <noscript><p class="hint">This drill needs JavaScript — nothing else, no trackers, no accounts.</p></noscript>
