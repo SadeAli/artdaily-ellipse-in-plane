@@ -705,8 +705,16 @@
     itemScores.push(r.score);
     state = 'reveal';
     cancelPointer();
+    /* "a 47° ellipse" is the first thing anybody reads here, and on a
+       first-ever reveal it is a number with no unit anyone owns. Say what
+       it measures once, and point at the label on the sheet that shows
+       it — after that the word carries itself. */
     var head = Math.round(r.score) + '/100 — a ' + Math.round(degreeOf(scene.truth)) +
-      '° ellipse. ' + missNote(r, player, scene.truth);
+      '° ellipse' +
+      (round === 1 && itemIdx === 0
+        ? ' (that ° is how open an ellipse is — the label on the sheet says what it means)'
+        : '') +
+      '. ' + missNote(r, player, scene.truth);
     if (itemIdx < ITEMS_PER_ROUND - 1) {
       btnLock.disabled = false;
       btnLock.textContent = 'next face →';
@@ -720,7 +728,14 @@
         var res = ArtDaily.report(roundScore(itemScores));
         hudScore.textContent = String(res.score);
         hudBest.textContent = res.best === null ? '–' : String(res.best);
-        showToast((res.isNewBest ? 'new best! ' : 'score ') + res.score + ' / 100', res.isNewBest);
+        /* A first-ever round has no previous best, so isNewBest is
+           trivially true and "new best!" celebrates nothing — on the one
+           round where the number most needs saying what it IS. The SDK
+           marks that round with isFirst; an older vendored SDK simply
+           leaves it undefined and the old wording stands. */
+        showToast(res.isFirst
+          ? 'first score ' + res.score + ' / 100 — your mark to beat'
+          : (res.isNewBest ? 'new best! ' : 'score ') + res.score + ' / 100', res.isNewBest);
       }
       /* the ramp guarantees the LAST face is the worst, so the round used
          to end on the player's weakest number. Name the best one too. */
@@ -757,6 +772,16 @@
   function ellipsePath(e) {
     ctx.beginPath();
     ctx.ellipse(e.cx, e.cy, e.a, e.b, e.theta, 0, TAU);
+  }
+
+  /* half the rendered width of a label, so a centred one can be kept on
+     the sheet by its own size instead of by a guessed margin */
+  function textHalfWidth(txt, size) {
+    ctx.save();
+    ctx.font = '700 ' + size + 'px ' + MONO;
+    var w = ctx.measureText(txt).width;
+    ctx.restore();
+    return (isFinite(w) ? w : 0) / 2;
   }
 
   /* Graphite on a paper-coloured halo: legible over box edges and
@@ -974,18 +999,31 @@
     ctx.fill();
     ctx.restore();
     /* name both at once, on the picture that defines them: the dashed line
-       IS the axle, and the ellipse's short way across lies along it */
-    inkText(c, 'axle · the minor (short) axis lies along it',
-      clamp(ax.x + ax.dx * (L + 6), 96, W - 96),
+       IS the axle, and the ellipse's short way across lies along it.
+       Clamped by its own measured width — the old fixed 96px margin was
+       narrower than half this label, so its left end hung off the sheet
+       whenever the axle pointed left. */
+    var axleTxt = 'axle · the minor (short) axis lies along it';
+    var axleHalf = textHalfWidth(axleTxt, 10);
+    inkText(c, axleTxt,
+      clamp(ax.x + ax.dx * (L + 6),
+        Math.min(axleHalf + 4, W / 2), Math.max(W - axleHalf - 4, W / 2)),
       clamp(ax.y + ax.dy * (L + 6), 10, H - 10), 'center', 'middle', 10);
 
     var yext = Math.sqrt(Math.pow(t.a * Math.sin(t.theta), 2) +
       Math.pow(t.b * Math.cos(t.theta), 2));
     var below = t.cy + yext + 14 <= H - 26;
     var y0 = below ? t.cy + yext + 14 : t.cy - yext - 32;
-    var x0 = clamp(t.cx, 86, W - 86);
-    inkText(c, 'true ' + Math.round(degreeOf(t)) + '° · b/a ' +
-      (nt.b / Math.max(1e-9, nt.a)).toFixed(2), x0, clamp(y0, 6, H - 22), 'center', 'top', 12);
+    /* "b/a" was algebra, and it was the first thing a beginner met on the
+       first reveal of their first round. The number is the same number;
+       it just says which two things it is comparing. Centred text has to
+       be clamped by its own measured half-width or a long label runs off
+       a 330px sheet. */
+    var trueTxt = 'true ' + Math.round(degreeOf(t)) + '° · short ' +
+      (nt.b / Math.max(1e-9, nt.a)).toFixed(2) + ' of long';
+    var half = textHalfWidth(trueTxt, 12);
+    var x0 = clamp(t.cx, Math.min(half + 4, W / 2), Math.max(W - half - 4, W / 2));
+    inkText(c, trueTxt, x0, clamp(y0, 6, H - 22), 'center', 'top', 12);
     if (player) {
       inkText(c, 'you ' + Math.round(degreeOf(player)) + '°',
         x0, clamp(y0 + 15, 21, H - 6), 'center', 'top', 12);
