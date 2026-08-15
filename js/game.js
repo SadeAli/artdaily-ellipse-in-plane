@@ -505,29 +505,47 @@
      line is the same rose at graphite weight, for the strokes that
      carry meaning — the wash is only 2.95:1 on the paper card, the
      line clears AA in both themes. Re-read on every repaint. */
+  /* The ONLY thing that moves any of these is the data-theme attribute
+     (see css/style.css), so reading them once per theme gives the same
+     answer as reading them once per repaint — minus a forced style
+     recalculation on every sample of every sweep. An empty read
+     (stylesheet not parsed yet) is never cached, so a cold boot still
+     corrects itself on the next frame. */
+  var inkCache = null, inkTheme = '';
   function inks() {
+    var t = ArtDaily.theme();
+    if (inkCache && inkTheme === t) return inkCache;
     var cs = getComputedStyle(document.documentElement);
     var accent = cs.getPropertyValue('--game-accent').trim() || cs.getPropertyValue('--bubblegum').trim();
-    return {
+    var c = {
       ink: cs.getPropertyValue('--ink').trim(),
       muted: cs.getPropertyValue('--muted').trim(),
       accent: accent,
       line: cs.getPropertyValue('--game-line').trim() || accent,
       card: cs.getPropertyValue('--card').trim(),
     };
+    if (c.ink && c.card) { inkCache = c; inkTheme = t; }
+    return c;
   }
 
-  /* ---- crisp canvas at any devicePixelRatio; height tracks width ---- */
-  var W = 0, H = 0;
+  /* ---- crisp canvas at any devicePixelRatio; height tracks width ----
+     Assigning canvas.width BLANKS the sheet, so it is only assigned when
+     something really moved: a phone fires `resize` on every pixel of
+     address-bar slide, at an unchanged width, and each one used to
+     reallocate the backing store and re-project the whole scene. */
+  var W = 0, H = 0, fitDpr = 0;
   function fitCanvas() {
     var rect = canvas.getBoundingClientRect();
-    W = Math.max(1, Math.round(rect.width));
-    H = Math.round(W * 0.62);
+    var w = Math.max(1, Math.round(rect.width));
+    var h = Math.round(w * 0.62);
     var dpr = window.devicePixelRatio || 1;
+    if (w === W && h === H && dpr === fitDpr) return false;
+    W = w; H = h; fitDpr = dpr;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return true;
   }
 
   /* ---- round state ---- */
@@ -809,7 +827,28 @@
     };
   }
 
+  /* ---- repaint scheduling ----
+     A sweep is the fastest gesture in the whole drill, and it arrives
+     faster still: several pointermoves per displayed frame, each of which
+     used to redraw the box, both sets of edges, the tinted face and every
+     point of the sweep so far. Only the last of those was ever seen, and
+     the cost of each grew with the length of the sweep — so the ink lagged
+     the hand most at the end of the arc, which is exactly where closing an
+     ellipse needs the hand to be believed. draw() now only ASKS for a
+     frame; paint() runs once, right before the browser composites. */
+  var rafId = 0;
   function draw() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(function () { rafId = 0; paint(); });
+  }
+  /* for paths that must not show a blank frame — a resize has already
+     cleared the sheet, so it repaints on the spot */
+  function paintNow() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    paint();
+  }
+
+  function paint() {
     var c = inks();
     ctx.clearRect(0, 0, W, H);
     if (!scene) return;
@@ -1056,9 +1095,36 @@
     canvas.classList.remove('dragging');
   }
 
-  function pointerPos(ev) {
-    var rect = canvas.getBoundingClientRect();
-    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+  /* One rect per EVENT, not one per sample: a 240Hz pen hands over a dozen
+     coalesced positions in a single dispatch, and measuring the canvas box
+     a dozen times to convert them is a dozen forced layouts for an answer
+     that cannot have changed in between. */
+  function pointerPos(ev, rect) {
+    var r = rect || canvas.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  }
+
+  /* Every position the hardware actually recorded, not only the ones the
+     browser chose to dispatch. A sweep is fast, and between two delivered
+     moves a real hand may have travelled a quarter of the arc through
+     three recorded samples. Without them the ink is the chord across that
+     gap: the conic is fitted to a polygon instead of a curve, and
+     strokeCoverage — which decides whether the sweep counts as having gone
+     round at all — reads the gap as ground never covered. */
+  function samplesOf(ev) {
+    var evs = (typeof ev.getCoalescedEvents === 'function') ? ev.getCoalescedEvents() : null;
+    return (evs && evs.length) ? evs : [ev];
+  }
+
+  /* Sub-pixel repeats are not shape. strokeCoverage bins them into the arc
+     they already filled, so dropping them cannot cost a sweep any ground —
+     but the conic fit is a least-squares over the points, and it weights
+     every copy, so a hand resting for half a second used to pull the whole
+     ellipse toward wherever it rested. */
+  function addSample(pts, p) {
+    var last = pts.length ? pts[pts.length - 1] : null;
+    if (last && Math.abs(p.x - last.x) < 1 && Math.abs(p.y - last.y) < 1) return;
+    pts.push(p);
   }
 
   function pickHandle(px, py) {
@@ -1170,16 +1236,26 @@
 
   canvas.addEventListener('pointermove', function (ev) {
     if (state !== 'aim') return;
-    var p;
+    var p, rect;
     if (stroke && ev.pointerId === stroke.id) {
       ev.preventDefault();
-      p = pointerPos(ev);
-      /* True coordinates, NOT clamped into the rect. Clamping wrote a
-         straight run along the sheet edge into the point cloud whenever a
-         finger overshot, which quietly dragged the fitted conic — a wrong
-         ellipse with no message, which is worse than a rejection. Samples
-         far outside the sheet are dropped instead. */
-      if (Math.abs(p.x - W / 2) < 1.6 * W && Math.abs(p.y - H / 2) < 1.6 * H) stroke.pts.push(p);
+      rect = canvas.getBoundingClientRect();
+      var evs = samplesOf(ev), i;
+      for (i = 0; i < evs.length; i++) {
+        p = pointerPos(evs[i], rect);
+        /* True coordinates, NOT clamped into the rect. Clamping wrote a
+           straight run along the sheet edge into the point cloud whenever a
+           finger overshot, which quietly dragged the fitted conic — a wrong
+           ellipse with no message, which is worse than a rejection. Samples
+           far outside the sheet are dropped instead. */
+        if (!(Math.abs(p.x - W / 2) < 1.6 * W && Math.abs(p.y - H / 2) < 1.6 * H)) continue;
+        /* A hand that pauses mid-sweep keeps emitting samples from the
+           same spot. Those are not shape — they are a hundred copies of
+           one point, and the least-squares conic weights every copy, so
+           pausing on the near end of an arc quietly pulled the fit toward
+           it. Sub-pixel repeats are ink the sheet already has. */
+        addSample(stroke.pts, p);
+      }
       draw();
       return;
     }
@@ -1212,6 +1288,14 @@
         canvas.classList.remove('dragging');
         draw();
       } else {
+        /* THE TAIL OF A FAST SWEEP. pointerup carries a position of its
+           own, and it is the only record of where the hand really stopped
+           — the last pointermove can be most of a frame behind it. On the
+           closing stretch of an arc that is the difference between a sweep
+           that reads as having gone round and one the drill sends back. It
+           also anchors lift-and-resume, which measures the next press
+           against where you actually lifted. */
+        if (typeof ev.clientX === 'number') addSample(stroke.pts, pointerPos(ev));
         finishStroke();
       }
       return;
@@ -1342,17 +1426,22 @@
     btnHow.setAttribute('aria-expanded', String(!howTo.hidden));
   });
 
-  ArtDaily.onTheme(draw);
+  ArtDaily.onTheme(function () { inkCache = null; paintNow(); });
   /* the hardware can change mid-session (an iPad user picks up the
      pencil): handle reach, the closure rule and the free zone follow it */
   ArtDaily.onInput(draw);
 
   /* Resizing re-projects the scene; the player's ellipse rides along
-     through the same similarity change so nothing is lost. */
-  window.addEventListener('resize', function () {
+     through the same similarity change so nothing is lost. A resize that
+     did not change the sheet is not a resize: an address bar sliding on a
+     phone used to cancel the sweep in flight, re-project the box and
+     rescale the plate for nothing. */
+  var resizeRaf = 0;
+  function onResize() {
+    resizeRaf = 0;
     var oldT = scene ? scene.T : null;
+    if (!fitCanvas()) return;   /* nothing moved, and nothing was cleared */
     cancelPointer();
-    fitCanvas();
     measureLock();
     if (scene && oldT) {
       layoutScene(scene, W, H);
@@ -1365,7 +1454,11 @@
         clampCentre(player);
       }
     }
-    draw();
+    paintNow();   /* fitCanvas already blanked the sheet — no empty frame */
+  }
+  window.addEventListener('resize', function () {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(onResize);
   });
 
   /* ---- boot ---- */
