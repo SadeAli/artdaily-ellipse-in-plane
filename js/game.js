@@ -1110,11 +1110,10 @@
      three recorded samples. Without them the ink is the chord across that
      gap: the conic is fitted to a polygon instead of a curve, and
      strokeCoverage — which decides whether the sweep counts as having gone
-     round at all — reads the gap as ground never covered. */
-  function samplesOf(ev) {
-    var evs = (typeof ev.getCoalescedEvents === 'function') ? ev.getCoalescedEvents() : null;
-    return (evs && evs.length) ? evs : [ev];
-  }
+     round at all — reads the gap as ground never covered.
+     ArtDaily.samples is that pattern once, guarded; this drill used to
+     hand-roll it, and an engine that throws out of getCoalescedEvents took
+     the whole pointermove handler — and so the live sweep — down with it. */
 
   /* Sub-pixel repeats are not shape. strokeCoverage bins them into the arc
      they already filled, so dropping them cannot cost a sweep any ground —
@@ -1240,7 +1239,7 @@
     if (stroke && ev.pointerId === stroke.id) {
       ev.preventDefault();
       rect = canvas.getBoundingClientRect();
-      var evs = samplesOf(ev), i;
+      var evs = ArtDaily.samples(ev), i;
       for (i = 0; i < evs.length; i++) {
         p = pointerPos(evs[i], rect);
         /* True coordinates, NOT clamped into the rect. Clamping wrote a
