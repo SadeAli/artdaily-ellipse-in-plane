@@ -595,10 +595,25 @@
     return v === 'handles' ? 'handles' : 'draw';
   })();
 
+  /* FIRST-EVER VISIT: TWO FACES, NOT THREE. Face 3 is the heavily
+     foreshortened one — a 20-something-degree ellipse, the template shape
+     a beginner has never drawn — and it is the face that only makes sense
+     once the first two have taught what the axle is. Three full freehand
+     sweeps, each one re-swept until it closes, is several minutes before a
+     single reported number, which is a long time to ask of somebody still
+     deciding whether the drill is for them. Every sibling drill in the set
+     already shortens its first round exactly this way; this was the one
+     that did not. It can only ever fire for a player with NO recorded
+     best, so no score, streak or record that already exists changes what
+     it means — and the round is still the mean of the faces played. */
+  var itemsThisRound = ITEMS_PER_ROUND;
+
+  /* the "n of m" is built by itemHint(), so a short first round counts
+     itself honestly instead of promising a third face that never comes */
   var ITEM_NOTE = [
-    'face 1 of 3 — the open top, a plate lying on a table.',
-    'face 2 of 3 — a turned side, so steeper.',
-    'face 3 of 3 — a narrow one: the minor axis runs down the axle, the line straight out of the face.',
+    'the open top, a plate lying on a table.',
+    'a turned side, so steeper.',
+    'a narrow one: the minor axis runs down the axle, the line straight out of the face.',
   ];
 
   function itemHint() {
@@ -611,7 +626,8 @@
     } else {
       verb = 'drag the plate onto the tinted face — centre moves, rim handles set length and tilt, the small one sets width — then lock it in.';
     }
-    return ITEM_NOTE[itemIdx] + ' ' + verb;
+    return 'face ' + (itemIdx + 1) + ' of ' + itemsThisRound + ' — ' +
+      (ITEM_NOTE[itemIdx] || '') + ' ' + verb;
   }
 
   /* Where the corner sticker sits, in canvas coordinates — null when
@@ -706,6 +722,7 @@
     itemScores = [];
     roundOver = false;
     reported = false;
+    itemsThisRound = (FIRST_VISIT && round === 1) ? 2 : ITEMS_PER_ROUND;
     hudRound.textContent = String(round);
     hudScore.textContent = '–';
     startItem(0);
@@ -733,7 +750,7 @@
         ? ' (that ° is how open an ellipse is — the label on the sheet says what it means)'
         : '') +
       '. ' + missNote(r, player, scene.truth);
-    if (itemIdx < ITEMS_PER_ROUND - 1) {
+    if (itemIdx < itemsThisRound - 1) {
       btnLock.disabled = false;
       btnLock.textContent = 'next face →';
       hint.textContent = head + ' study the delta, then next face.';
@@ -759,13 +776,14 @@
          to end on the player's weakest number. Name the best one too. */
       hint.textContent = head + ' round done — faces ' + scoreList() +
         ' · your best face ' + Math.round(bestScore(itemScores)) +
-        '. press “new round” (or enter) to go again.';
+        '. press “new round” (or enter) to go again' +
+        (itemsThisRound < ITEMS_PER_ROUND ? ' — the next round adds a third face.' : '.');
     }
     draw();
   }
 
   function advance() {
-    if (state === 'reveal' && !roundOver && itemIdx < ITEMS_PER_ROUND - 1) {
+    if (state === 'reveal' && !roundOver && itemIdx < itemsThisRound - 1) {
       startItem(itemIdx + 1);
     }
   }

@@ -23,7 +23,9 @@ anyone who is not on a pen, and two unfinished sweeps offer it again.
 `R` starts the plate over in either mode, so no misplacement is ever a
 dead end.
 
-Three faces per round, each turned further away. After every lock the
+Three faces per round, each turned further away — a first-ever round is
+two, so the drill hands over a score before it hands over its hardest
+face. After every lock the
 true ellipse is revealed in the accent with its ellipse "degree", the
 axle (labelled, with the minor axis named on it), and a one-line note
 naming whichever of placement / tilt / size you missed by most — so you
